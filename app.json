@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "Jodi - Meaningful Connections",
+    "slug": "jodi-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#B85C2E",
+      "resizeMode": "contain"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.jodiapp.meet"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#B85C2E"
+      },
+      "package": "com.jodiapp.meet"
+    },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
