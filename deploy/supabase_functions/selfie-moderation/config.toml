@@ -1,0 +1,8 @@
+# Selfie Moderation Function Configuration
+# Required Secrets:
+# - SUPABASE_URL
+# - SUPABASE_SERVICE_ROLE_KEY
+
+[env]
+SUPABASE_URL = ""
+SUPABASE_SERVICE_ROLE_KEY = ""

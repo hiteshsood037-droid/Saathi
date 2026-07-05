@@ -1,0 +1,10 @@
+# AI Icebreaker Function Configuration
+# Required Secrets:
+# - SUPABASE_URL
+# - SUPABASE_SERVICE_ROLE_KEY
+# - OPENAI_API_KEY (Optional if using other provider)
+
+[env]
+SUPABASE_URL = ""
+SUPABASE_SERVICE_ROLE_KEY = ""
+OPENAI_API_KEY = ""
