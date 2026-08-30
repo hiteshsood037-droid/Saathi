@@ -79,6 +79,9 @@ set_secret() {
 # Example secrets (should be set in the environment)
 set_secret "STRIPE_SECRET_KEY" "$STRIPE_SECRET_KEY"
 set_secret "STRIPE_WEBHOOK_SIGN_SECRET" "$STRIPE_WEBHOOK_SIGN_SECRET"
+set_secret "STRIPE_PRICE_PREMIUM_ID" "$STRIPE_PRICE_PREMIUM_ID"
+set_secret "STRIPE_PRICE_GOLD_ID" "$STRIPE_PRICE_GOLD_ID"
+set_secret "APP_REDIRECT_URL" "$APP_REDIRECT_URL"
 set_secret "OPENAI_API_KEY" "$OPENAI_API_KEY"
 
 echo -e "${GREEN}✅ Secrets configured.${NC}"
