@@ -181,3 +181,24 @@ AI/ML integration point: new `photo-moderation` edge function stub
 (`edge-functions/photo-moderation/index.ts`) mirrors the selfie-moderation
 pattern — call AWS Rekognition / Google Vision / Sightengine, write
 `moderation_score` + `status`.
+
+---
+
+# Stripe Premium Membership Prep (2026-08-30)
+
+**Status: preparation only — no live Stripe product created** (owner-gated).
+
+Full spec: `deploy/STRIPE_MEMBERSHIP_SETUP.md`. Covers the Premium product +
+recurring `$14.99/month` price, the `STRIPE_PRICE_PREMIUM_ID` env-var mapping,
+the checkout/webhook metadata contract (`subscriptionTier`, `userId`), the
+**9 Premium feature flags** (mirrors `webapp/src/lib/features.js`), and a
+webhook endpoint setup + go-live checklist.
+
+Edge functions verified for a real recurring subscription:
+- `create-checkout-session` — correct (`mode:'subscription'`, session +
+  subscription metadata). Needs `STRIPE_PRICE_PREMIUM_ID` set.
+- `stripe-webhook` — **hardened**: now reads `subscription.status` and downgrades
+  to `Free` on `past_due`/`unpaid`/`canceled`/`incomplete`. `STRIPE_WEBHOOK_SIGN_SECRET`
+  must be set in production (otherwise the dev fallback skips signature verification).
+- `deploy/deploy.sh` — added `STRIPE_PRICE_PREMIUM_ID` / `STRIPE_PRICE_GOLD_ID` /
+  `APP_REDIRECT_URL` to the secrets list.
