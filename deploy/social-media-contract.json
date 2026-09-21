@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": 1,
+  "updated_at": "2026-09-21",
+  "access": {
+    "bucket_visibility": "private",
+    "upload_path_pattern": "{authenticated-user-id}/{uuid}.{extension}",
+    "signed_url_ttl_seconds": 300,
+    "browser_cors": "allowlisted origins only; never wildcard in production"
+  },
+  "media": {
+    "voice_intro": {
+      "bucket": "profile-voice",
+      "max_bytes": 5242880,
+      "max_duration_seconds": 60,
+      "allowed_mime_types": ["audio/mpeg", "audio/mp4", "audio/aac", "audio/ogg", "audio/wav", "audio/webm"]
+    },
+    "profile_video": {
+      "bucket": "profile-videos",
+      "max_bytes": 26214400,
+      "max_duration_seconds": 30,
+      "allowed_mime_types": ["video/mp4", "video/quicktime", "video/webm"]
+    },
+    "story_media": {
+      "bucket": "story-media",
+      "max_bytes": 15728640,
+      "max_video_duration_seconds": 15,
+      "expires_after_seconds": 86400,
+      "allowed_mime_types": ["image/jpeg", "image/png", "image/webp", "video/mp4", "video/quicktime", "video/webm"]
+    }
+  },
+  "music": {
+    "provider": "spotify",
+    "mode": "server_side_catalog_search",
+    "requested_user_scopes": [],
+    "store": ["provider", "provider_track_id", "track_name", "artist_name", "album_image_url", "external_url"],
+    "do_not_store": ["provider_access_token", "provider_refresh_token", "audio_stream_url"],
+    "rate_limit": { "requests_per_user_per_minute": 30, "search_query_max_length": 100 }
+  }
+}
