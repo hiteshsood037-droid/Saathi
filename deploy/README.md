@@ -73,6 +73,19 @@ supabase secrets set OPENAI_API_KEY=sk-proj-...
 2.  Add an endpoint pointing to: `https://<your-project-ref>.supabase.co/functions/v1/stripe-webhook`.
 3.  Select events: `checkout.session.completed`, `customer.subscription.deleted`, `customer.subscription.updated`.
 
+## 🎙️ Social Media & Favorite Music Production Package
+
+For voice introductions, profile videos, 24-hour stories, private-media access, and Spotify-backed favorite-music catalog search, follow [`SOCIAL_MEDIA_PRODUCTION.md`](./SOCIAL_MEDIA_PRODUCTION.md).
+
+It includes:
+- [`social-media-storage.sql`](./social-media-storage.sql) — private bucket configuration, RLS, and story-media cleanup backstop
+- [`social-media-contract.json`](./social-media-contract.json) — canonical MIME, size, duration, expiry, and signed-URL contract
+- [`social-media.env.example`](./social-media.env.example) — server-only secret inventory with no live values
+- [`validate-social-media-config.mjs`](./validate-social-media-config.mjs) — offline production-readiness validator
+- `edge-functions/music-catalog/` — authenticated, server-side Spotify catalog search proxy
+
+Apply the social-feature data-model migration before the storage configuration. The package intentionally does not place provider or service credentials in the mobile client bundle.
+
 ## 🛠 Troubleshooting
 
 *   **RLS Violations**: If you see permission errors in the app, verify that the policies in `supabase_migration.sql` were applied correctly.

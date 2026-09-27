@@ -1,0 +1,21 @@
+# Jodi music-catalog Edge Function configuration
+# Deploy source: edge-functions/music-catalog/index.ts
+# JWT verification must remain enabled. The handler also validates the caller's
+# bearer token as defense in depth.
+#
+# Required server-side secrets:
+# - SUPABASE_URL
+# - SUPABASE_ANON_KEY
+# - SPOTIFY_CLIENT_ID
+# - SPOTIFY_CLIENT_SECRET
+# - APP_ALLOWED_ORIGINS
+#
+# Optional:
+# - MEDIA_SIGNED_URL_TTL_SECONDS (used by planned media URL issuer, not this function)
+
+[env]
+SUPABASE_URL = ""
+SUPABASE_ANON_KEY = ""
+SPOTIFY_CLIENT_ID = ""
+SPOTIFY_CLIENT_SECRET = ""
+APP_ALLOWED_ORIGINS = ""
