@@ -18,6 +18,8 @@ const contractPath = resolve(process.cwd(), 'deploy/social-media-contract.json')
 const requiredProductionVariables = [
   'SUPABASE_URL',
   'SUPABASE_SERVICE_ROLE_KEY',
+  'MEDIA_DURATION_VALIDATOR_URL',
+  'MEDIA_DURATION_VALIDATOR_TOKEN',
   'SPOTIFY_CLIENT_ID',
   'SPOTIFY_CLIENT_SECRET',
   'APP_ALLOWED_ORIGINS',
@@ -73,6 +75,15 @@ export function validateProductionEnvironment(environment) {
 
   if (environment.SUPABASE_URL && !/^https:\/\/[^/]+\.supabase\.co\/?$/.test(environment.SUPABASE_URL)) {
     issues.push('SUPABASE_URL must be an HTTPS Supabase project URL');
+  }
+  if (environment.MEDIA_DURATION_VALIDATOR_URL) {
+    try {
+      if (new URL(environment.MEDIA_DURATION_VALIDATOR_URL).protocol !== 'https:') {
+        issues.push('MEDIA_DURATION_VALIDATOR_URL must be an HTTPS URL');
+      }
+    } catch {
+      issues.push('MEDIA_DURATION_VALIDATOR_URL must be an HTTPS URL');
+    }
   }
 
   const origins = (environment.APP_ALLOWED_ORIGINS ?? '')

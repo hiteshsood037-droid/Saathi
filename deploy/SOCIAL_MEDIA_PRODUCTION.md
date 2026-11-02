@@ -27,10 +27,12 @@ The canonical machine-readable limits live in [`social-media-contract.json`](./s
 
 ### 1. Apply the migrations in the correct order
 
-1. Apply the backend engineer’s social-feature data-model migration first. It creates the media records, story-expiry rule, and media-duration validation used by the product.
+1. In the Supabase SQL Editor, apply [`social-feature-production.sql`](./social-feature-production.sql). It creates the social data model, RLS/visibility RPCs, 24-hour story expiry, and declared-duration integrity checks.
 2. In the Supabase SQL Editor, run [`social-media-storage.sql`](./social-media-storage.sql).
 3. Verify the three buckets are **private** and have the exact byte/MIME settings in the contract file.
-4. If the project has `pg_cron` enabled, create the hourly schedule shown at the bottom of `social-media-storage.sql`. The schedule invokes `cleanup_expired_story_objects()` at minute 17. If `pg_cron` is not available, run that function hourly from the platform’s scheduled-job mechanism instead.
+4. Deploy the canonical `social-media` function using `edge-functions/social-media/index.ts` and `deploy/supabase_functions/social-media/config.toml` with JWT verification enabled. Its exact client contract is in [`SOCIAL_FEATURE_API.md`](./SOCIAL_FEATURE_API.md).
+5. Set `MEDIA_DURATION_VALIDATOR_URL` and `MEDIA_DURATION_VALIDATOR_TOKEN` for a trusted server-side media probe before enabling audio/video finalization. The function refuses to publish unmeasured audio/video when these are absent.
+6. If the project has `pg_cron` enabled, create both hourly schedules: `cleanup_expired_story_objects()` at minute 17 (from this file) and `cleanup_expired_social_stories()` at minute 23 (from the social-feature migration). If `pg_cron` is not available, run both functions hourly from the platform’s scheduled-job mechanism instead.
 
 The two layers are intentional: product data drives user-visible story expiry at 24 hours; storage cleanup removes abandoned/orphaned files after at most roughly 25 hours.
 
