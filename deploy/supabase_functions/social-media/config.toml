@@ -1,0 +1,15 @@
+# Supabase Functions configuration for the canonical social media API.
+# Deploy with JWT verification enabled; the handler also verifies the bearer token.
+verify_jwt = true
+
+# Required server-side secrets:
+# SUPABASE_URL
+# SUPABASE_ANON_KEY
+# SUPABASE_SERVICE_ROLE_KEY
+# APP_ALLOWED_ORIGINS
+# MEDIA_DURATION_VALIDATOR_URL
+# MEDIA_DURATION_VALIDATOR_TOKEN
+#
+# MEDIA_DURATION_VALIDATOR_* belongs to a trusted media probe service. It receives
+# a five-minute signed object URL and must return JSON: {"duration_seconds": number}.
+# Never expose either value to browsers or native clients.

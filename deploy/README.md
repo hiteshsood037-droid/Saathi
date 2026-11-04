@@ -78,13 +78,16 @@ supabase secrets set OPENAI_API_KEY=sk-proj-...
 For voice introductions, profile videos, 24-hour stories, private-media access, and Spotify-backed favorite-music catalog search, follow [`SOCIAL_MEDIA_PRODUCTION.md`](./SOCIAL_MEDIA_PRODUCTION.md).
 
 It includes:
+- [`social-feature-production.sql`](./social-feature-production.sql) — social data model, RLS/visibility model, expiring stories, and read RPCs
 - [`social-media-storage.sql`](./social-media-storage.sql) — private bucket configuration, RLS, and story-media cleanup backstop
+- [`SOCIAL_FEATURE_API.md`](./SOCIAL_FEATURE_API.md) — exact client RPC/Edge Function request, response, error, and signed-upload contract
 - [`social-media-contract.json`](./social-media-contract.json) — canonical MIME, size, duration, expiry, and signed-URL contract
 - [`social-media.env.example`](./social-media.env.example) — server-only secret inventory with no live values
-- [`validate-social-media-config.mjs`](./validate-social-media-config.mjs) — offline production-readiness validator
+- [`validate-social-media-config.mjs`](./validate-social-media-config.mjs) and [`validate-social-feature-api.mjs`](./validate-social-feature-api.mjs) — offline production-readiness and API-contract validators
+- `edge-functions/social-media/` — authenticated media/social mutation endpoint
 - `edge-functions/music-catalog/` — authenticated, server-side Spotify catalog search proxy
 
-Apply the social-feature data-model migration before the storage configuration. The package intentionally does not place provider or service credentials in the mobile client bundle.
+Apply `social-feature-production.sql` before the storage configuration. The package intentionally does not place provider or service credentials in the mobile client bundle.
 
 ## 🛠 Troubleshooting
 
