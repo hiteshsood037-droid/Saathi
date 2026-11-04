@@ -305,28 +305,47 @@ async function finalizeUpload(request: Json, userId: string, admin: ReturnType<t
 async function createStory(request: Json, userId: string, admin: ReturnType<typeof createClient>) {
   const mediaId = requiredString(request.media_id, "media_id", 36);
   const caption = optionalString(request.caption, "caption", 220);
-  const { data: asset, error: assetError } = await admin.from("social_media").select().eq("id", mediaId).maybeSingle();
-  if (assetError || !asset || asset.profile_id !== userId || asset.media_type !== "story_media" || asset.is_published) {
-    fail(404, "STORY_MEDIA_NOT_FOUND", "Finalized unpublished story media was not found");
-  }
-  const { data: story, error } = await admin.from("social_stories").insert({
-    profile_id: userId, media_id: mediaId, caption,
-    // The database trigger sets this to exactly 24 hours after created_at.
-    expires_at: nowIsoAfter(24 * 60 * 60 * 1000),
-  }).select().single();
-  if (error || !story) fail(503, "STORY_UNAVAILABLE", "Unable to create the story");
-  await admin.from("social_media").update({ is_published: true }).eq("id", mediaId);
-  return { story: { story_id: story.id, media_id: story.media_id, caption: story.caption, created_at: story.created_at, expires_at: story.expires_at } };
+  // This RPC inserts the story and publishes its media in one database
+  // transaction, so a failed publish can never leave a visible half-story.
+  const { data, error } = await admin.rpc("create_social_story", {
+    p_profile_id: userId,
+    p_media_id: mediaId,
+    p_caption: caption,
+  });
+  if (error) fail(503, "STORY_UNAVAILABLE", "Unable to create the story");
+  if (!data) fail(404, "STORY_MEDIA_NOT_FOUND", "Finalized unpublished story media was not found");
+  return { story: data as Json };
 }
 
 async function deleteStory(request: Json, userId: string, admin: ReturnType<typeof createClient>) {
   const storyId = requiredString(request.story_id, "story_id", 36);
-  const { data: story, error } = await admin.from("social_stories").select("id, profile_id, media_id").eq("id", storyId).maybeSingle();
-  if (error || !story || story.profile_id !== userId) fail(404, "STORY_NOT_FOUND", "Story was not found");
-  const { data: asset } = await admin.from("social_media").select("bucket, object_path").eq("id", story.media_id).maybeSingle();
-  if (asset) await removeObject(admin, asset.bucket, asset.object_path);
-  const { error: deleteError } = await admin.from("social_media").delete().eq("id", story.media_id);
-  if (deleteError) fail(503, "STORY_UNAVAILABLE", "Unable to delete the story");
+  // First atomically hide the story and unpublish its media. The returned
+  // target remains available for a safe retry if the non-transactional storage
+  // delete or final database purge is temporarily unavailable.
+  const { data: target, error: stageError } = await admin.rpc("stage_social_story_delete", {
+    p_profile_id: userId,
+    p_story_id: storyId,
+  });
+  if (stageError) fail(503, "STORY_UNAVAILABLE", "Unable to delete the story");
+  if (!target) fail(404, "STORY_NOT_FOUND", "Story was not found");
+
+  const cleanupTarget = target as Json;
+  const { error: storageError } = await admin.storage
+    .from(requiredString(cleanupTarget.bucket, "story cleanup bucket", 100))
+    .remove([requiredString(cleanupTarget.object_path, "story cleanup object_path", 1024)]);
+  if (storageError) {
+    console.error("social-media story cleanup is pending", { storyId, error: storageError.message });
+    fail(503, "STORY_CLEANUP_UNAVAILABLE", "Story is no longer visible, but media cleanup is pending; retry delete_story");
+  }
+
+  const { error: purgeError } = await admin.rpc("complete_social_story_delete", {
+    p_profile_id: userId,
+    p_story_id: storyId,
+  });
+  if (purgeError) {
+    console.error("social-media story database purge is pending", { storyId, error: purgeError.message });
+    fail(503, "STORY_CLEANUP_UNAVAILABLE", "Story is no longer visible, but media cleanup is pending; retry delete_story");
+  }
   return { deleted: true, story_id: storyId };
 }
 
@@ -393,33 +412,26 @@ function validateMusic(value: unknown): Array<Record<string, unknown>> {
 
 async function updateSettings(request: Json, userId: string, admin: ReturnType<typeof createClient>) {
   const settingsRaw = request.settings === undefined ? {} : asObject(request.settings, "settings");
-  const settings: Record<string, unknown> = { profile_id: userId, updated_at: new Date().toISOString() };
+  const settings: Json = {};
   for (const key of ["voice_visibility", "video_visibility", "story_visibility", "profile_content_visibility"]) {
     if (settingsRaw[key] !== undefined) settings[key] = validateVisibility(settingsRaw[key], key);
   }
-  const { error: settingsError } = await admin.from("social_settings").upsert(settings);
-  if (settingsError) fail(503, "SETTINGS_UNAVAILABLE", "Unable to update social settings");
 
-  if (request.prompts !== undefined) {
-    const rows = validatePrompts(request.prompts);
-    await admin.from("social_prompts").delete().eq("profile_id", userId);
-    if (rows.length) { const { error } = await admin.from("social_prompts").insert(rows.map((row) => ({ ...row, profile_id: userId }))); if (error) fail(503, "SETTINGS_UNAVAILABLE", "Unable to update prompts"); }
-  }
-  if (request.green_flag_badges !== undefined) {
-    const rows = validateBadges(request.green_flag_badges);
-    await admin.from("social_green_flag_badges").delete().eq("profile_id", userId);
-    if (rows.length) { const { error } = await admin.from("social_green_flag_badges").insert(rows.map((row) => ({ ...row, profile_id: userId }))); if (error) fail(503, "SETTINGS_UNAVAILABLE", "Unable to update green flag badges"); }
-  }
-  if (request.icebreakers !== undefined) {
-    const rows = validateIcebreakers(request.icebreakers);
-    await admin.from("social_icebreakers").delete().eq("profile_id", userId);
-    if (rows.length) { const { error } = await admin.from("social_icebreakers").insert(rows.map((row) => ({ ...row, profile_id: userId }))); if (error) fail(503, "SETTINGS_UNAVAILABLE", "Unable to update icebreakers"); }
-  }
-  if (request.favorite_music !== undefined) {
-    const rows = validateMusic(request.favorite_music);
-    await admin.from("social_favorite_music").delete().eq("profile_id", userId);
-    if (rows.length) { const { error } = await admin.from("social_favorite_music").insert(rows.map((row) => ({ ...row, profile_id: userId }))); if (error) fail(503, "SETTINGS_UNAVAILABLE", "Unable to update favorite music"); }
-  }
+  // Keep omitted collection fields as null rather than [], because null means
+  // "leave unchanged" while [] means an intentional replace-all clear.
+  const prompts = request.prompts === undefined ? null : validatePrompts(request.prompts);
+  const greenFlagBadges = request.green_flag_badges === undefined ? null : validateBadges(request.green_flag_badges);
+  const icebreakers = request.icebreakers === undefined ? null : validateIcebreakers(request.icebreakers);
+  const favoriteMusic = request.favorite_music === undefined ? null : validateMusic(request.favorite_music);
+  const { error } = await admin.rpc("update_social_settings", {
+    p_profile_id: userId,
+    p_settings: settings,
+    p_prompts: prompts,
+    p_green_flag_badges: greenFlagBadges,
+    p_icebreakers: icebreakers,
+    p_favorite_music: favoriteMusic,
+  });
+  if (error) fail(503, "SETTINGS_UNAVAILABLE", "Unable to update social settings");
   return { updated: true };
 }
 

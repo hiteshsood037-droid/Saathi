@@ -48,6 +48,58 @@ for (const rpc of ['get_profile_social_content', 'get_active_stories', 'get_matc
   requireText(migration, `FUNCTION public.${rpc}`, 'social-feature-production.sql');
   requireText(docs, `\`${rpc}\``, 'SOCIAL_FEATURE_API.md');
 }
+
+// Atomic social mutations must remain database RPCs. These checks intentionally
+// guard the production consistency design without needing a live Supabase DB.
+const atomicRpcs = [
+  'create_social_story',
+  'stage_social_story_delete',
+  'complete_social_story_delete',
+  'update_social_settings',
+];
+const sqlFunction = (name) => {
+  const start = migration.indexOf(`CREATE OR REPLACE FUNCTION public.${name}(`);
+  if (start < 0) return '';
+  const end = migration.indexOf('\n$$;', start);
+  return end < 0 ? '' : migration.slice(start, end + 4);
+};
+const requireAtomicFunctionText = (name, needle) => {
+  const body = sqlFunction(name);
+  if (!body.includes(needle)) issues.push(`atomic RPC ${name} is missing: ${needle}`);
+};
+for (const rpc of atomicRpcs) {
+  requireText(migration, `FUNCTION public.${rpc}`, 'social-feature-production.sql');
+  requireText(migration, `REVOKE ALL ON FUNCTION public.${rpc}`, 'social-feature-production.sql');
+  requireText(handler, `rpc("${rpc}"`, 'social-media Edge Function');
+  requireAtomicFunctionText(rpc, 'SECURITY DEFINER');
+}
+for (const [rpc, requirement] of [
+  ['create_social_story', 'INSERT INTO public.social_stories'],
+  ['create_social_story', 'UPDATE public.social_media\n  SET is_published = true'],
+  ['stage_social_story_delete', 'UPDATE public.social_stories SET deleted_at'],
+  ['stage_social_story_delete', 'UPDATE public.social_media SET is_published = false'],
+  ['complete_social_story_delete', 'DELETE FROM public.social_media m'],
+  ['update_social_settings', 'DELETE FROM public.social_prompts'],
+  ['update_social_settings', 'DELETE FROM public.social_green_flag_badges'],
+  ['update_social_settings', 'DELETE FROM public.social_icebreakers'],
+  ['update_social_settings', 'DELETE FROM public.social_favorite_music'],
+  ['update_social_settings', 'INSERT INTO public.social_prompts'],
+  ['update_social_settings', 'INSERT INTO public.social_green_flag_badges'],
+  ['update_social_settings', 'INSERT INTO public.social_icebreakers'],
+  ['update_social_settings', 'INSERT INTO public.social_favorite_music'],
+]) requireAtomicFunctionText(rpc, requirement);
+for (const directMutation of [
+  'admin.from("social_stories")',
+  'admin.from("social_settings")',
+  'admin.from("social_prompts")',
+  'admin.from("social_green_flag_badges")',
+  'admin.from("social_icebreakers")',
+  'admin.from("social_favorite_music")',
+]) {
+  if (handler.includes(directMutation)) issues.push(`social-media Edge Function bypasses atomic RPC with ${directMutation}`);
+}
+requireText(docs, 'STORY_CLEANUP_UNAVAILABLE', 'SOCIAL_FEATURE_API.md');
+requireText(docs, 'one atomic database mutation', 'SOCIAL_FEATURE_API.md');
 for (const securityRequirement of [
   'ENABLE ROW LEVEL SECURITY',
   'resolve_social_read_target',

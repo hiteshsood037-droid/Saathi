@@ -156,7 +156,7 @@ Treat `signed_url` as short-lived in-memory view state only. Refresh it by calli
 
 ### 4. `create_story`
 
-Attaches finalized, unpublished `story_media` to a story. The database sets `expires_at` to exactly 24 hours after `created_at`.
+Atomically attaches finalized, unpublished `story_media` to a story and publishes that media. The database sets `expires_at` to exactly 24 hours after `created_at`; a failed request never exposes a story whose media is still unpublished.
 
 ```json
 {
@@ -184,7 +184,7 @@ Success (`200`):
 
 ### 5. `delete_story`
 
-Deletes an owned story and asks private storage to remove its media. Expired stories are not returned by reads even before scheduled cleanup.
+Atomically hides an owned story and unpublishes its media before private-storage cleanup. Expired stories are not returned by reads even before scheduled cleanup. If cleanup cannot finish, the hidden deletion remains safely retryable rather than returning a story with missing media.
 
 ```json
 { "action": "delete_story", "story_id": "uuid" }
@@ -196,9 +196,11 @@ Success (`200`):
 { "deleted": true, "story_id": "uuid" }
 ```
 
+If the action returns `503` with `error.code: "STORY_CLEANUP_UNAVAILABLE"`, the story is already hidden from all reads, but final cleanup is pending. Retry the **same** request until it returns `200`; retries resume the pending cleanup safely. Do not recreate the story or treat this response as a visible-story failure.
+
 ### 6. `update_settings`
 
-This is the only client mutation surface for profile social settings, Hinge-style prompts, Green Flag badges, icebreakers, and favorite music. Every collection field is **replace-all only when it is present**. Omit a field to leave it unchanged; send `[]` to clear it.
+This is the only client mutation surface for profile social settings, Hinge-style prompts, Green Flag badges, icebreakers, and favorite music. Every collection field is **replace-all only when it is present**. Omit a field to leave it unchanged; send `[]` to clear it. The settings upsert and every supplied collection replacement execute as one atomic database mutation: if any supplied insert or validation fails, all prior values remain unchanged.
 
 ```json
 {

@@ -457,6 +457,226 @@ BEGIN
 END;
 $$;
 
+
+-- The Edge Function calls these service-role-only RPCs instead of issuing
+-- multi-request table mutations. PostgreSQL executes every function call in a
+-- single transaction, so failed insert/validation paths roll back all changes.
+CREATE OR REPLACE FUNCTION public.create_social_story(
+  p_profile_id uuid,
+  p_media_id uuid,
+  p_caption text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  asset public.social_media;
+  story public.social_stories;
+BEGIN
+  SELECT * INTO asset
+  FROM public.social_media
+  WHERE id = p_media_id
+  FOR UPDATE;
+
+  IF NOT FOUND
+     OR asset.profile_id <> p_profile_id
+     OR asset.media_type <> 'story_media'
+     OR asset.is_published THEN
+    RETURN NULL;
+  END IF;
+
+  INSERT INTO public.social_stories (profile_id, media_id, caption, expires_at)
+  VALUES (p_profile_id, p_media_id, p_caption, timezone('utc', now()) + interval '24 hours')
+  RETURNING * INTO story;
+
+  UPDATE public.social_media
+  SET is_published = true
+  WHERE id = asset.id;
+
+  RETURN jsonb_build_object(
+    'story_id', story.id,
+    'media_id', story.media_id,
+    'caption', story.caption,
+    'created_at', story.created_at,
+    'expires_at', story.expires_at
+  );
+END;
+$$;
+
+-- Storage deletion is not part of the database transaction. Stage a delete by
+-- atomically making both records invisible, then let the Edge Function remove
+-- the object and call complete_social_story_delete. A failed cleanup leaves a
+-- hidden, retryable tombstone rather than a readable story with missing media.
+CREATE OR REPLACE FUNCTION public.stage_social_story_delete(
+  p_profile_id uuid,
+  p_story_id uuid
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  story public.social_stories;
+  asset public.social_media;
+BEGIN
+  SELECT * INTO story
+  FROM public.social_stories
+  WHERE id = p_story_id
+  FOR UPDATE;
+  IF NOT FOUND OR story.profile_id <> p_profile_id THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT * INTO asset
+  FROM public.social_media
+  WHERE id = story.media_id
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'story media is missing';
+  END IF;
+
+  IF story.deleted_at IS NULL THEN
+    UPDATE public.social_stories SET deleted_at = timezone('utc', now()) WHERE id = story.id;
+    UPDATE public.social_media SET is_published = false WHERE id = asset.id;
+  END IF;
+
+  RETURN jsonb_build_object('bucket', asset.bucket, 'object_path', asset.object_path);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.complete_social_story_delete(
+  p_profile_id uuid,
+  p_story_id uuid
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  story_exists boolean;
+BEGIN
+  DELETE FROM public.social_media m
+  USING public.social_stories s
+  WHERE s.id = p_story_id
+    AND s.profile_id = p_profile_id
+    AND s.deleted_at IS NOT NULL
+    AND s.media_id = m.id;
+
+  IF FOUND THEN
+    RETURN true;
+  END IF;
+
+  -- A repeated completion after a prior successful purge is harmless. An
+  -- existing non-deleted story, however, must never be purged by this RPC.
+  SELECT EXISTS (SELECT 1 FROM public.social_stories WHERE id = p_story_id)
+  INTO story_exists;
+  IF story_exists THEN
+    RAISE EXCEPTION 'story deletion has not been staged';
+  END IF;
+  RETURN true;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.update_social_settings(
+  p_profile_id uuid,
+  p_settings jsonb DEFAULT '{}'::jsonb,
+  p_prompts jsonb DEFAULT NULL,
+  p_green_flag_badges jsonb DEFAULT NULL,
+  p_icebreakers jsonb DEFAULT NULL,
+  p_favorite_music jsonb DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF p_profile_id IS NULL OR p_settings IS NULL OR jsonb_typeof(p_settings) <> 'object' THEN
+    RAISE EXCEPTION 'invalid social settings payload';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM jsonb_object_keys(p_settings) AS setting_key(key)
+    WHERE setting_key.key NOT IN ('voice_visibility', 'video_visibility', 'story_visibility', 'profile_content_visibility')
+  ) THEN
+    RAISE EXCEPTION 'invalid social settings key';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM unnest(ARRAY['voice_visibility', 'video_visibility', 'story_visibility', 'profile_content_visibility']) AS setting_key(key)
+    WHERE p_settings ? setting_key.key
+      AND (jsonb_typeof(p_settings -> setting_key.key) <> 'string' OR p_settings ->> setting_key.key NOT IN ('everyone', 'matches', 'hidden'))
+  ) THEN
+    RAISE EXCEPTION 'invalid social visibility';
+  END IF;
+  IF (p_prompts IS NOT NULL AND jsonb_typeof(p_prompts) <> 'array')
+     OR (p_green_flag_badges IS NOT NULL AND jsonb_typeof(p_green_flag_badges) <> 'array')
+     OR (p_icebreakers IS NOT NULL AND jsonb_typeof(p_icebreakers) <> 'array')
+     OR (p_favorite_music IS NOT NULL AND jsonb_typeof(p_favorite_music) <> 'array') THEN
+    RAISE EXCEPTION 'social content collections must be arrays';
+  END IF;
+  IF (p_prompts IS NOT NULL AND (jsonb_array_length(p_prompts) > 3 OR EXISTS (SELECT 1 FROM jsonb_array_elements(p_prompts) item WHERE jsonb_typeof(item) <> 'object')))
+     OR (p_green_flag_badges IS NOT NULL AND (jsonb_array_length(p_green_flag_badges) > 5 OR EXISTS (SELECT 1 FROM jsonb_array_elements(p_green_flag_badges) item WHERE jsonb_typeof(item) <> 'string')))
+     OR (p_icebreakers IS NOT NULL AND (jsonb_array_length(p_icebreakers) > 3 OR EXISTS (SELECT 1 FROM jsonb_array_elements(p_icebreakers) item WHERE jsonb_typeof(item) <> 'string')))
+     OR (p_favorite_music IS NOT NULL AND (jsonb_array_length(p_favorite_music) > 5 OR EXISTS (SELECT 1 FROM jsonb_array_elements(p_favorite_music) item WHERE jsonb_typeof(item) <> 'object'))) THEN
+    RAISE EXCEPTION 'invalid social content collection';
+  END IF;
+
+  INSERT INTO public.social_settings (
+    profile_id, voice_visibility, video_visibility, story_visibility, profile_content_visibility, updated_at
+  ) VALUES (
+    p_profile_id,
+    CASE WHEN p_settings ? 'voice_visibility' THEN (p_settings ->> 'voice_visibility')::public.social_visibility ELSE 'matches'::public.social_visibility END,
+    CASE WHEN p_settings ? 'video_visibility' THEN (p_settings ->> 'video_visibility')::public.social_visibility ELSE 'matches'::public.social_visibility END,
+    CASE WHEN p_settings ? 'story_visibility' THEN (p_settings ->> 'story_visibility')::public.social_visibility ELSE 'matches'::public.social_visibility END,
+    CASE WHEN p_settings ? 'profile_content_visibility' THEN (p_settings ->> 'profile_content_visibility')::public.social_visibility ELSE 'everyone'::public.social_visibility END,
+    timezone('utc', now())
+  )
+  ON CONFLICT (profile_id) DO UPDATE SET
+    voice_visibility = CASE WHEN p_settings ? 'voice_visibility' THEN (p_settings ->> 'voice_visibility')::public.social_visibility ELSE social_settings.voice_visibility END,
+    video_visibility = CASE WHEN p_settings ? 'video_visibility' THEN (p_settings ->> 'video_visibility')::public.social_visibility ELSE social_settings.video_visibility END,
+    story_visibility = CASE WHEN p_settings ? 'story_visibility' THEN (p_settings ->> 'story_visibility')::public.social_visibility ELSE social_settings.story_visibility END,
+    profile_content_visibility = CASE WHEN p_settings ? 'profile_content_visibility' THEN (p_settings ->> 'profile_content_visibility')::public.social_visibility ELSE social_settings.profile_content_visibility END,
+    updated_at = EXCLUDED.updated_at;
+
+  IF p_prompts IS NOT NULL THEN
+    DELETE FROM public.social_prompts WHERE profile_id = p_profile_id;
+    INSERT INTO public.social_prompts (profile_id, position, prompt, answer)
+    SELECT p_profile_id, item.position, item.prompt, item.answer
+    FROM jsonb_to_recordset(p_prompts) AS item(position smallint, prompt text, answer text);
+  END IF;
+
+  IF p_green_flag_badges IS NOT NULL THEN
+    DELETE FROM public.social_green_flag_badges WHERE profile_id = p_profile_id;
+    INSERT INTO public.social_green_flag_badges (profile_id, badge_code)
+    SELECT p_profile_id, jsonb_array_elements_text(p_green_flag_badges);
+  END IF;
+
+  IF p_icebreakers IS NOT NULL THEN
+    DELETE FROM public.social_icebreakers WHERE profile_id = p_profile_id;
+    INSERT INTO public.social_icebreakers (profile_id, position, text)
+    SELECT p_profile_id, item.ordinality::smallint, item.value
+    FROM jsonb_array_elements_text(p_icebreakers) WITH ORDINALITY AS item(value, ordinality);
+  END IF;
+
+  IF p_favorite_music IS NOT NULL THEN
+    DELETE FROM public.social_favorite_music WHERE profile_id = p_profile_id;
+    INSERT INTO public.social_favorite_music (
+      profile_id, position, provider, provider_track_id, track_name, artist_name, album_image_url, external_url
+    )
+    SELECT p_profile_id, item.position, item.provider, item.provider_track_id, item.track_name, item.artist_name,
+      item.album_image_url, item.external_url
+    FROM jsonb_to_recordset(p_favorite_music) AS item(
+      position smallint, provider text, provider_track_id text, track_name text, artist_name text,
+      album_image_url text, external_url text
+    );
+  END IF;
+END;
+$$;
+
 ALTER TABLE public.social_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.social_upload_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.social_media ENABLE ROW LEVEL SECURITY;
@@ -487,8 +707,12 @@ REVOKE ALL ON FUNCTION public.get_active_stories(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.get_match_streaks(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.resolve_social_read_target(uuid, uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.cleanup_expired_social_stories() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.create_social_story(uuid, uuid, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.stage_social_story_delete(uuid, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.complete_social_story_delete(uuid, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.update_social_settings(uuid, jsonb, jsonb, jsonb, jsonb, jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.get_profile_social_content(uuid), public.get_active_stories(uuid), public.get_match_streaks(uuid), public.resolve_social_read_target(uuid, uuid) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.cleanup_expired_social_stories() TO service_role;
+GRANT EXECUTE ON FUNCTION public.cleanup_expired_social_stories(), public.create_social_story(uuid, uuid, text), public.stage_social_story_delete(uuid, uuid), public.complete_social_story_delete(uuid, uuid), public.update_social_settings(uuid, jsonb, jsonb, jsonb, jsonb, jsonb) TO service_role;
 
 COMMIT;
 
